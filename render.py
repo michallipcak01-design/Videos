@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Predajné reels video pre Michaelo Cavalli (benátsky štuk) podľa style.md.
+"""Predajné reels video pre Michaelo Cavalli (limewash – matná dekoratívna vápenná farba) podľa style.md.
 
 Použitie:
   python3 render.py --src zdroj.mov --out michaelo_cavalli_reel.mp4 --handle @tvoj.handle
 
 Celé video sa renderuje snímka po snímke (PIL + numpy) a posiela do ffmpeg.
-Animované zábery (štuková textúra, stierka, kroky, kalkulačka, outro) sú
+Animované zábery (limewash textúra, štetec, kroky, kalkulačka, outro) sú
 generované procedurálne, hudba je syntetizovaná v numpy.
 """
 import argparse, math, os, subprocess, sys, tempfile, wave
@@ -97,7 +97,7 @@ def make_plaster(w, h, seed=7, tint=(1.0, 0.94, 0.85), dark=0.50, light=0.92):
     n1 = fractal_noise(w, h, seed, 7, 3)
     n2 = fractal_noise(w, h, seed + 1, 6, 5)
     n3 = fractal_noise(w, h, seed + 2, 5, 9)
-    # ťahy stierkou = ostré prechody (abs ridge) + oblakové škvrny
+    # oblakové škvrny a mäkké ťahy štetcom (matný limewash)
     ridge = 1.0 - np.abs(n2 - 0.5) * 2.0
     v = 0.72 * n1 + 0.13 * ridge ** 2 + 0.15 * n3
     v = (v - v.min()) / (v.max() - v.min())
@@ -105,7 +105,7 @@ def make_plaster(w, h, seed=7, tint=(1.0, 0.94, 0.85), dark=0.50, light=0.92):
     v = dark + (light - dark) * v
     rgb = np.stack([v * tint[0], v * tint[1], v * tint[2]], -1)
     # jemné zlaté žilky
-    vein = np.clip((ridge - 0.97) / 0.03, 0, 1)[..., None] * 0.4
+    vein = np.zeros_like(ridge)[..., None]
     rgb = rgb * (1 - 0.35 * vein) + np.array([0.85, 0.70, 0.42]) * 0.35 * vein
     return Image.fromarray((np.clip(rgb, 0, 1) * 255).astype(np.uint8))
 
@@ -250,14 +250,14 @@ class Assets:
         self.plaster2 = make_plaster(1400, 1400, seed=23, tint=(1.0, 0.95, 0.88))
         self.bg = bg_dark()
         self.dark_tex = Image.fromarray((np.asarray(make_plaster(W, H, seed=5), np.float32) * 0.28).astype(np.uint8))
-        # ťahy stierkou pre krok 2
+        # ťahy štetcom do kríža (X) pre krok 2
         rng = np.random.default_rng(3)
         self.strokes = []
-        for i in range(46):
-            cx, cy = rng.uniform(-60, 1000), rng.uniform(-60, 820)
-            rx, ry = rng.uniform(160, 320), rng.uniform(60, 140)
-            a0 = rng.uniform(0, 360)
-            self.strokes.append((cx, cy, rx, ry, a0, rng.uniform(140, 230)))
+        for i in range(40):
+            cx, cy = rng.uniform(0, 940), rng.uniform(0, 760)
+            ang = math.radians(rng.choice([45, -45]) + rng.uniform(-12, 12))
+            L = rng.uniform(260, 460)
+            self.strokes.append((cx, cy, ang, L, rng.uniform(120, 180)))
         self.ig_w = ig_icon(300, False)
         self.ig_c = ig_icon(300, True)
 
@@ -339,55 +339,55 @@ def anim_swatches(A, t, w, h):
         d.text((x + 6, yy + 254), name, font=f, fill=GOLD_L if i == sel else (200, 192, 180))
     return im
 
-def anim_trowel(A, t, dur, w, h):
-    flat = Image.new("RGB", (w, h), (196, 188, 176))
+def anim_brush(A, t, dur, w, h):
+    flat = Image.new("RGB", (w, h), (206, 200, 190))
     tex = A.plaster.resize((w, h), Image.BILINEAR, box=(100, 300, 100 + 1100, 300 + 1100 * h / w))
     m = Image.new("L", (w, h), 0)
     d = ImageDraw.Draw(m)
     n = len(A.strokes)
     prog = min(t / (dur * 0.92), 1.0) * n
     last = None
-    for i, (cx, cy, rx, ry, a0, width) in enumerate(A.strokes):
+    for i, (cx, cy, ang, L, width) in enumerate(A.strokes):
         if i > prog:
             break
         frac = min(prog - i, 1.0)
-        sweep = 150 * frac
-        d.arc((cx - rx, cy - ry, cx + rx, cy + ry), a0, a0 + sweep, fill=255, width=int(width))
-        ang = math.radians(a0 + sweep)
-        last = (cx + rx * math.cos(ang), cy + ry * math.sin(ang), ang)
-    m = m.filter(ImageFilter.GaussianBlur(6))
+        dx, dy = math.cos(ang) * L / 2, math.sin(ang) * L / 2
+        x0, y0 = cx - dx, cy - dy
+        x1, y1 = x0 + 2 * dx * frac, y0 + 2 * dy * frac
+        d.line((x0, y0, x1, y1), fill=200, width=int(width))
+        last = (x1, y1, ang)
+    m = m.filter(ImageFilter.GaussianBlur(14))
     im = Image.composite(tex, flat, m)
     if last is not None and t < dur * 0.95:
         x, y, ang = last
         lay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         dd = ImageDraw.Draw(lay)
-        # stierka (oceľová doska + rukoväť)
-        pts = [(-110, -40), (110, -40), (110, 40), (-110, 40)]
-        ca, sa = math.cos(ang * 0.3), math.sin(ang * 0.3)
-        P = [(x + px * ca - py * sa, y + px * sa + py * ca) for px, py in pts]
-        dd.polygon([(p[0] + 10, p[1] + 14) for p in P], fill=(0, 0, 0, 90))
-        dd.polygon(P, fill=(205, 210, 215, 255), outline=(120, 125, 130, 255))
-        hx, hy = x - 30 * sa, y + 30 * ca
-        dd.rounded_rectangle((hx - 70, hy - 18, hx + 70, hy + 18), radius=16, fill=(120, 78, 44, 255))
+        # široký štetec na limewash (štetiny + drevené telo + rukoväť)
+        pa = ang + math.pi / 2
+        ca, sa = math.cos(pa), math.sin(pa)
+        def R(px, py):
+            return (x + px * ca - py * sa, y + px * sa + py * ca)
+        dd.polygon([R(-95, -10), R(95, -10), R(85, 60), R(-85, 60)], fill=(232, 220, 196, 255))   # štetiny
+        dd.polygon([R(-100, 60), R(100, 60), R(100, 110), R(-100, 110)], fill=(150, 104, 62, 255))  # telo
+        dd.polygon([R(-18, 110), R(18, 110), R(14, 260), R(-14, 260)], fill=(120, 80, 46, 255))    # rukoväť
         im.paste(lay, (0, 0), lay)
     return im
 
-def anim_shine(A, t, w, h):
+def anim_matte(A, t, w, h):
+    """Matný povrch: pohyblivé bočné svetlo zvýrazní hĺbku, bez lesku."""
     tex = A.plaster.resize((w, h), Image.BILINEAR, box=(200, 900, 200 + 1000, 900 + 1000 * h / w))
     a = np.asarray(tex, np.float32)
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
-    pos = ((t * 0.55) % 1.3 - 0.15) * (w + h)
-    band = np.exp(-(((xx + yy) - pos) / 90.0) ** 2)[..., None]
-    gloss = 1.0 + 0.10 * min(t / 2.0, 1.0)
-    a = a * gloss + band * np.array([90, 78, 55.0])
+    lx = w * (0.15 + 0.7 * ease(t / 5.0))
+    light = 0.78 + 0.32 * np.exp(-(((xx - lx) / (w * 0.55)) ** 2 + ((yy - h * 0.3) / (h * 0.9)) ** 2))
+    a = a * light[..., None] * np.array([1.02, 1.0, 0.96])
     im = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
-    d = ImageDraw.Draw(im)
-    rng = np.random.default_rng(int(t * 6))
-    for _ in range(7):
-        sx, sy = rng.uniform(0, w), rng.uniform(0, h)
-        r = rng.uniform(6, 16)
-        d.line((sx - r, sy, sx + r, sy), fill=(255, 248, 225), width=3)
-        d.line((sx, sy - r, sx, sy + r), fill=(255, 248, 225), width=3)
+    d = ImageDraw.Draw(im, "RGBA")
+    al = int(255 * ease((t - 0.6) / 0.5))
+    if al > 0:  # štítok MATT
+        d.rounded_rectangle((w - 250, h - 110, w - 40, h - 40), radius=34, fill=(20, 17, 15, int(al * 0.75)))
+        f = font(F_SANS_XB, 38)
+        d.text((w - 145 - d.textlength("MATT", font=f) / 2, h - 97), "MATT", font=f, fill=GOLD_L + (al,))
     return im
 
 def anim_calculator(A, t):
@@ -403,10 +403,10 @@ def anim_calculator(A, t):
     d = ImageDraw.Draw(lay)
     d.rounded_rectangle((x0, y0, x1, y1), radius=44, fill=(250, 245, 236, 255))
     d.text((x0 + 60, y0 + 56), "Kalkulačka ceny", font=font(F_SANS_XB, 54), fill=DARK)
-    d.text((x0 + 60, y0 + 126), "benátsky štuk na mieru", font=font(F_SERIF_I, 40), fill=(150, 112, 50))
+    d.text((x0 + 60, y0 + 126), "limewash na mieru", font=font(F_SERIF_I, 40), fill=(150, 112, 50))
     area = int(24 * ease(min((t - 0.5) / 1.2, 1)))
     rows = [("Plocha steny", f"{max(area,0)} m²"), ("Odtieň", "Piesková" if t > 1.6 else "—"),
-            ("Povrch", "Lesklý" if t > 2.0 else "—")]
+            ("Povrch", "Matný" if t > 2.0 else "—")]
     for i, (k, v) in enumerate(rows):
         yy = y0 + 230 + i * 120
         d.rounded_rectangle((x0 + 50, yy, x1 - 50, yy + 92), radius=22, fill=(238, 230, 216, 255))
@@ -446,7 +446,7 @@ def build_timeline(src, A):
         [(0.0, 1.4, "word", "LUXUS", GOLD_L)])
     # ---- 3.4–11.4 PROBLÉM (animované)
     add(2.0, lambda t: scene_boring_room(t, 0), [(0.0, 1.0, "word", "BIELA", None), (1.0, 2.0, "word", "STENA?", None)])
-    add(2.0, lambda t: scene_boring_room(t, 1), [(0.0, 1.0, "word", "FARBA", None), (1.0, 2.0, "word", "NUDA", None)])
+    add(2.0, lambda t: scene_boring_room(t, 1), [(0.0, 1.0, "word", "PLOCHÁ", None), (1.0, 2.0, "word", "NUDA", None)])
     add(2.0, lambda t: scene_boring_room(t, 2), [(0.0, 1.0, "word", "PRASKLINY", None), (1.0, 2.0, "word", "ŠEDÁ", None)])
     add(2.0, lambda t: scene_boring_room(1.5 + t, 0).filter(ImageFilter.GaussianBlur(2)),
         [(0.0, 2.0, "phrase", [[("každý byt vyzerá", False)], [("rovnako…", True)]])])
@@ -464,13 +464,13 @@ def build_timeline(src, A):
         return im
     add(2.0, black_card, wm=False)
     # ---- 13.4–23.4 RIEŠENIE: reálne zábery + jump-zoomy
-    add(1.4, lambda t: scene_plaster_pan(A, t, 1.4, 0.1, 0.1, 0.4, 0.25), [(0, 1.4, "word", "BENÁTSKY", None)])
-    add(1.4, lambda t: src.get(0.0 + t * 0.9, 1.05), [(0, 1.4, "word", "ŠTUK", GOLD_L)])
-    add(1.3, lambda t: src.get(1.0 + t * 0.5, 2.3 + 0.1 * t, 0.22, 0.30), [(0, 1.3, "word", "RUČNE", None)])
-    add(1.3, lambda t: src.get(1.6 + t * 0.8, 1.15, 0.55, 0.5), [(0, 1.3, "word", "VRSTVA", None)])
+    add(1.4, lambda t: scene_plaster_pan(A, t, 1.4, 0.1, 0.1, 0.4, 0.25), [(0, 1.4, "word", "LIMEWASH", GOLD_L)])
+    add(1.4, lambda t: src.get(0.0 + t * 0.9, 1.05), [(0, 1.4, "word", "VÁPENNÁ", None)])
+    add(1.3, lambda t: src.get(1.0 + t * 0.5, 2.3 + 0.1 * t, 0.22, 0.30), [(0, 1.3, "word", "FARBA", None)])
+    add(1.3, lambda t: src.get(1.6 + t * 0.8, 1.15, 0.55, 0.5), [(0, 1.3, "word", "MATNÁ", None)])
     add(1.3, lambda t: src.get(0.4 + t * 0.4, 1.0, 0.5, 0.5).resize((W, H), Image.BILINEAR, box=(40, 120, 640, 1186)),
-        [(0, 1.3, "word", "PO", None)])
-    add(1.3, lambda t: scene_plaster_pan(A, t, 1.3, 0.6, 0.5, 0.3, 0.7, 1.15, 1.3), [(0, 1.3, "word", "VRSTVE", None)])
+        [(0, 1.3, "word", "ŤAH", None)])
+    add(1.3, lambda t: scene_plaster_pan(A, t, 1.3, 0.6, 0.5, 0.3, 0.7, 1.15, 1.3), [(0, 1.3, "word", "PO ŤAHU", None)])
     add(2.0, lambda t: src.get(4.3 + t * 0.65, 1.10 + 0.04 * t, 0.6, 0.45),
         [(0, 2.0, "phrase", [[("žiadne dve steny", False)], [("nie sú rovnaké", True)]])])
     # ---- 23.4–38.4 KROKY (rozdelená obrazovka)
@@ -486,19 +486,19 @@ def build_timeline(src, A):
             return im
         return r
     add(5.0, split(lambda t, w, h: anim_swatches(A, t, w, h), 5.6, 0.25, 1, "Výber odtieňa",
-                   lambda t: "vyberieš farbu a lesk" if t < 2.5 else "presne k tvojmu interiéru"))
-    add(5.0, split(lambda t, w, h: anim_trowel(A, t, 5.0, w, h), 6.85, 0.25, 2, "Aplikácia",
-                   lambda t: "ručne, vrstva po vrstve" if t < 2.5 else "každý ťah je originál"))
-    add(5.0, split(lambda t, w, h: anim_shine(A, t, w, h), 8.6, 0.45, 3, "Finálny lesk",
-                   lambda t: "vosk a leštenie" if t < 2.5 else "hĺbka, ktorá žiari"))
+                   lambda t: "nájdeme tvoj odtieň" if t < 2.5 else "presne k tvojmu interiéru"))
+    add(5.0, split(lambda t, w, h: anim_brush(A, t, 5.0, w, h), 6.85, 0.25, 2, "Aplikácia",
+                   lambda t: "štetcom, ťahy do kríža" if t < 2.5 else "každý ťah je originál"))
+    add(5.0, split(lambda t, w, h: anim_matte(A, t, w, h), 8.6, 0.45, 3, "Matný finiš",
+                   lambda t: "zamatový, bez lesku" if t < 2.5 else "hĺbka v každom svetle"))
     # ---- 38.4–42.4 ZHRNUTIE
-    add(2.4, lambda t: src.get(8.7 + t, 1.05 + 0.04 * t), [(0, 1.2, "word", "VYDRŽÍ", None), (1.2, 2.4, "word", "DESAŤROČIA", GOLD_L)])
-    quick = [(lambda t: src.get(0.2 + t, 1.6, 0.25, 0.25), "ODOLNÝ"),
-             (lambda t: scene_plaster_pan(A, t, 0.4, 0.2, 0.7, 0.3, 0.75, 1.3, 1.4), "PRIEDUŠNÝ"),
-             (lambda t: src.get(3.0 + t, 1.25, 0.55, 0.5), "UNIKÁTNY"),
-             (lambda t: src.get(10.4 + t, 1.1), "LUXUSNÝ")]
+    add(2.4, lambda t: src.get(8.7 + t, 1.05 + 0.04 * t), [(0, 1.2, "word", "PRÍRODNÁ", None), (1.2, 2.4, "word", "VÁPENNÁ", GOLD_L)])
+    quick = [(lambda t: src.get(0.2 + t, 1.6, 0.25, 0.25), "MATNÁ"),
+             (lambda t: scene_plaster_pan(A, t, 0.4, 0.2, 0.7, 0.3, 0.75, 1.3, 1.4), "PRIEDUŠNÁ"),
+             (lambda t: src.get(3.0 + t, 1.25, 0.55, 0.5), "UNIKÁTNA"),
+             (lambda t: src.get(10.4 + t, 1.1), "LUXUSNÁ")]
     for fn, w_ in quick:
-        add(0.4, fn, [(0, 0.4, "word", w_, GOLD_L if w_ == "LUXUSNÝ" else None)])
+        add(0.4, fn, [(0, 0.4, "word", w_, GOLD_L if w_ == "LUXUSNÁ" else None)])
     # ---- 42.4–46.4 CTA kalkulačka
     add(4.0, lambda t: anim_calculator(A, t),
         [(0, 4.0, "phrase", [[("pošli mi rozmery", False)], [("spočítam ti cenu", True)]])])
@@ -529,7 +529,7 @@ def build_timeline(src, A):
             tw = d.textlength(txt, font=f2)
             d.text(((W - tw) / 2, y), txt, font=f2, fill=g)
         f3 = font(F_SANS_M, 36)
-        txt = "Michaelo Cavalli · benátsky štuk"
+        txt = "Michaelo Cavalli · limewash"
         gg = tuple(int(v * ease((tt - 0.6) / 0.4)) for v in (190, 180, 165))
         tw = d.textlength(txt, font=f3)
         d.text(((W - tw) / 2, 1200), txt, font=f3, fill=gg)
